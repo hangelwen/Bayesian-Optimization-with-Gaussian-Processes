@@ -148,8 +148,15 @@ class bayes_opt:
             self.bounds.append(params_dict[key])
 
         self.bounds = numpy.asarray(self.bounds)
+        self.xmins = self.bounds[:, 0]
 
-        self.log_bounds = 0 * numpy.asarray(self.bounds)
+        # Put bounds on a log scale once and for all
+        self.original_bounds = self.bounds
+        self.bounds = numpy.log10(self.bounds - self.bounds[:, [0]] + 1)
+
+
+        # List of initialization points
+        self.init_points = []
 
         # ----------------------- // ----------------------- # ----------------------- // ----------------------- #
         for n, pair in enumerate(self.bounds):
@@ -157,12 +164,6 @@ class bayes_opt:
                 raise RuntimeError('The upper and lower bound of parameter %i are the same, the upper bound must be greater than the lower bound.' % n)
             if pair[1] < pair[0]:
                 raise RuntimeError('The upper bound of parameter %i is less than the lower bound, the upper bound must be greater than the lower bound.' % n)
-
-        
-        if all(self.bounds[:, 0] > 0):
-            ratio = self.bounds[:, [1]] / self.bounds[:, [0]]
-            if any(ratio > 1000):
-                print('The order of magnitude of some of your bounds is too different, you may benefit from using log_maximize.')
 
 
         # ----------------------- // ----------------------- # ----------------------- // ----------------------- #
@@ -302,23 +303,14 @@ class bayes_opt:
         '''
         total_time = datetime.now()
 
+
+        def return_log(x):
+            return (10 ** x) + self.xmins - 1
+
+
         # ------------------------------ // ------------------------------ // ------------------------------ #
-        if not self.user_init:
-            print('Optimization procedure is initializing at %i random points.' % init_points)
-            #Chose some points at random
-            xtrain = numpy.asarray([numpy.random.uniform(x[0], x[1], size = init_points) for x in self.bounds]).T
-            #Pass a dictionary with random parameters values back to the function.
-            ytrain = numpy.asarray([self.f(**dict(zip(self.keys, xs))) for xs in xtrain])            
-            print('Optimization procedure is done initializing.')
-        else:
-            print('Optimization procedure is initializing at %i random points.' % init_points)
-            new_xtrain = numpy.asarray([numpy.random.uniform(x[0], x[1], size = init_points) for x in self.bounds]).T
-            
-            xtrain = numpy.concatenate((self.user_x, new_xtrain), axis = 0)
-            ytrain = numpy.concatenate((self.user_y, numpy.asarray([self.f(**dict(zip(self.keys, xs))) for xs in new_xtrain])))
-            print('Optimization procedure is done initializing.')
-
-
+        xtrain, ytrain = self.init(init_points)
+        print(ytrain.max())
 
         pi = print_info(verbose)
         ymax = ytrain.max()
@@ -341,8 +333,7 @@ class bayes_opt:
             op_start = datetime.now()
 
             xtrain = numpy.concatenate((xtrain, x_max.reshape((1, self.dim))), axis = 0)
-            #ytrain = numpy.concatenate((ytrain, self.f(**dict(zip(self.keys, x_max)))), axis = 0)
-            ytrain = numpy.append(ytrain, self.f(**dict(zip(self.keys, x_max))))
+            ytrain = numpy.append(ytrain, self.f(**dict(zip(self.keys, return_log(x_max)))))
 
             ymax = ytrain.max()
 
@@ -355,7 +346,7 @@ class bayes_opt:
             # Finding new argmax of the acquisition function.
             x_max = self.acq_max(gp, ymax, restarts, self.bounds)
             # Printing everything
-            pi.print_info(op_start, i, x_max, ymax, xtrain, ytrain, self.keys)
+            pi.print_info(op_start, i, x_max, self.xmins, ymax, xtrain, ytrain, self.keys)
             
 
         tmin, tsec = divmod((datetime.now() - total_time).total_seconds(), 60)
@@ -365,118 +356,6 @@ class bayes_opt:
             return ytrain.max(), dict(zip(self.keys, xtrain[numpy.argmax(ytrain)])), ytrain, xtrain
         else:
             return ytrain.max(), dict(zip(self.keys, xtrain[numpy.argmax(ytrain)]))
-        
-
-    def log_maximize(self, init_points = 3, restarts = 10, num_it = 15, verbose = 2, full_out = False):
-        ''' Main optimization method perfomed in a log scale.
-
-            Parameters
-            ----------
-            init_points : Number of randomly chosen points to sample the target function before fitting the gp.
-
-            restarts : The number of times minimation if to be repeated. Larger number of restarts
-                       improves the chances of finding the true maxima.
-
-            num_it : Total number of times the process is to reapeated. Note that currently this methods does not have
-                     stopping criteria (due to a number of reasons), therefore the total number of points to be sampled
-                     must be specified.
-
-            verbose : The amount of information to be printed during optimization. Accepts 0(nothing), 1(partial), 2(full).
-
-            full_out : If the full output is to be returned or just the function maximum and arg max.
-            
-  
-            Returns
-            -------
-            y_max, x_max : The function maximum and its position.
-
-            y_max, x_max, y, x : In addition to the maximum and arg max, return all the sampled x and y points.
-            
-        '''
-        total_time = datetime.now()
-
-
-        # ------------------------------ // ------------------------------ // ------------------------------ #
-        for n, pair in enumerate(self.bounds):
-            if pair[0] <= 0:
-                raise RuntimeError('The lower bound of parameter %i is less or equal to zero, log grid requires strictly positive lower bounds.' % n)
-
-        #Put all the bounds in the 0-1 interval of a log scale.
-        self.log_bounds = numpy.log10(self.bounds/self.bounds[:, [0]]) / numpy.log10(self.bounds/self.bounds[:, [0]])[:, [1]]
-        min_max_ratio = numpy.log10(self.bounds[:, 1] / self.bounds[:, 0])
-        xmins = self.bounds[:, 0]
-
-        def return_log(x):
-            return xmins * (10 ** (x * min_max_ratio))
-
-
-        if not self.user_init:
-            print('Optimization procedure is initializing at %i random points.' % init_points)
-            #Sampling some points are random to define xtrain.
-            xtrain = numpy.asarray([numpy.random.uniform(x[0], x[1], size = init_points) for x in self.log_bounds]).T
-            ytrain = numpy.asarray([self.f(**dict(zip(self.keys, return_log(x)))) for x in xtrain])
-            print('Optimization procedure is done initializing.')
-        else:
-            print('Optimization procedure is initializing at %i random points.' % init_points)
-            #Sampling some points are random
-            new_xtrain = numpy.asarray([numpy.random.uniform(x[0], x[1], size = init_points) for x in self.log_bounds]).T
-            #Setting the user init points in the log scale
-            init_x = numpy.log10(self.user_x/self.bounds[:, 0]) / numpy.log10(self.bounds[:, 1]/self.bounds[:, 0])
-            #Defining xtrain and ytrain
-            xtrain = numpy.concatenate((init_x, new_xtrain), axis = 0)
-            ytrain = numpy.concatenate((self.user_y, numpy.asarray([self.f(**dict(zip(self.keys, return_log(x)))) for x in new_xtrain])))
-
-            print('Optimization procedure is done initializing.')
-
-
-        pi = print_info(verbose)
-        ymax = ytrain.max()
-
-
-        # ------------------------------ // ------------------------------ // ------------------------------ #
-        # Fitting the gaussian process
-        gp = GP(kernel = self.kernel, theta = self.k_theta, l = self.k_l)
-        if self.min_log:
-            gp.best_fit(xtrain, ytrain)
-        else:
-            gp.fit(xtrain, ytrain)
-        
-
-        # Finding argmax of the acquisition function.
-        x_max = self.acq_max(gp, ymax, restarts, self.log_bounds)
-
-        for i in range(num_it):
-            op_start = datetime.now()
-
-            xtrain = numpy.concatenate((xtrain, x_max.reshape((1, self.dim))), axis = 0)
-            #ytrain = numpy.concatenate((ytrain, self.f(**dict(zip(self.keys, return_log(x_max))))), axis = 0)
-            ytrain = numpy.append(ytrain, self.f(**dict(zip(self.keys, return_log(x_max)))))
-            
-            ymax = ytrain.max()
-
-            #Updating the GP.
-            if self.min_log:
-                gp.best_fit(xtrain, ytrain)
-            else:
-                gp.fit(xtrain, ytrain)
-
-
-            # Finding new argmax of the acquisition function.
-            x_max = self.acq_max(gp, ymax, restarts, self.log_bounds)
-            # Printing everything
-            pi.print_log(op_start, i, x_max, xmins, min_max_ratio, ymax, xtrain, ytrain, self.keys)
-                
-
-        tmin, tsec = divmod((datetime.now() - total_time).total_seconds(), 60)
-        print('Optimization finished with maximum: %8f | Time taken: %i minutes and %s seconds' % (ytrain.max(), tmin, tsec))
-
-        if full_out:
-            return ytrain.max(), dict(zip(self.keys, return_log(xtrain[numpy.argmax(ytrain)]))), ytrain, return_log(xtrain)
-        else:
-            return ytrain.max(), dict(zip(self.keys, return_log(xtrain[numpy.argmax(ytrain)])))
-
-
-
 
     # ------------------------------ // ------------------------------ # ------------------------------ // ------------------------------ #
     # ------------------------------ // ------------------------------ # ------------------------------ // ------------------------------ #
@@ -494,47 +373,54 @@ class bayes_opt:
             
         '''
 
-        
-        list_points = []
-        for key in self.pdict.keys():
-            try:
-                list_points.append(points_dict[key])
-            except KeyError:
-                print('Parameters names have to match exactly.')
-        
+        ################################################
+        # Consistency check
+        param_tup_lens = []
 
-        list_points = numpy.asarray(list_points)
+        for key in self.keys:
+            param_tup_lens.append(len(list(points_dict[key])))
 
-        try:
-            list_points.shape[1]
-            user_pts = list_points.T
-        except:
-            user_pts = list_points.reshape((1, self.dim))
-
-
-        print('Initializing %i points...' % len(user_pts))
-        op_start = datetime.now()
-
-        if self.user_init == False:
-    
-            self.user_x = user_pts
-            self.user_y = numpy.asarray([self.f(**dict(zip(self.keys, x))) for x in user_pts])
-
+        if all([e == param_tup_lens[0] for e in param_tup_lens]):
+            pass
         else:
-            self.user_x = numpy.concatenate((self.user_x, numpy.asarray(list_points).reshape((len(user_pts), self.dim))), axis = 0)
-            self.user_y = numpy.concatenate((self.user_y, numpy.asarray([self.f(**dict(zip(self.keys, x))) for x in user_pts])))
-
-        numpy.set_printoptions(precision = 4, suppress = True)
-        minutes, seconds = divmod((datetime.now() - op_start).total_seconds(), 60)
-        
-        print('...done in %s minutes and %s seconds.' % (minutes, seconds))
-        print('The current maximum is: %f, with parameters: ' % numpy.max(self.user_y), dict(zip(self.keys, self.user_x[numpy.argmax(self.user_y)])))
-
-
-        self.user_init = True
+            raise ValueError('The same number of initialization points must be entered for every parameter.')
 
 
 
-    def init(self, points_dict):
-        '''A function to perform all initialization and clear the optimize methods - To be constructed'''
-        return 0
+        ################################################
+        # Turn into list of lists
+
+        all_points = []
+        for key in self.keys:
+            all_points.append(points_dict[key])
+
+        # Take transpose of list
+        self.init_points = list(map(list, zip(*all_points)))
+
+
+    def init(self, init_points):
+
+        def return_log(x):
+            return (10 ** x) + self.xmins - 1
+
+        # Generate random points
+        l = [numpy.random.uniform(x[0], x[1], size=init_points) for x in self.original_bounds]
+
+        # Concatenate its transpose to the list of init points
+        self.init_points += list(map(list, zip(*l)))
+
+        x_init = numpy.asarray(self.init_points)
+        x_init = numpy.log10(x_init - self.xmins + 1)
+
+        y_init = []
+
+        for x in x_init:
+            print('init a point...', end="")
+            y_init.append(self.f(**dict(zip(self.keys, return_log(x)))))
+
+            print(return_log(x), self.f(**dict(zip(self.keys, return_log(x)))))
+            print('done.')
+
+        y_init = numpy.asarray(y_init)
+
+        return x_init, y_init

@@ -89,7 +89,7 @@ def sample_covariance(X1, sample, kernel):
     return M.reshape(len(X1))
 
 ################################################################################
-############################# Aquisition Functions #############################
+############################# Acquisition Functions #############################
 ################################################################################
 
 class acquisition:
@@ -178,7 +178,7 @@ class print_info:
         self.timer = 0
 
 
-    def print_info(self, op_start, i, x_max, ymax, xtrain, ytrain, keys):
+    def print_info_old(self, op_start, i, x_max, ymax, xtrain, ytrain, keys):
 
         if self.lvl == 2:                
             numpy.set_printoptions(precision = 4, suppress = True)
@@ -208,10 +208,10 @@ class print_info:
             pass
 
 
-    def print_log(self, op_start, i, x_max, xmins, min_max_ratio, ymax, xtrain, ytrain, keys):
+    def print_info(self, op_start, i, x_max, xmins, ymax, xtrain, ytrain, keys):
 
         def return_log(x):
-            return xmins * (10 ** (x * min_max_ratio))
+            return (10 ** x) + xmins - 1
 
         dict_len = len(keys)
 
